@@ -12,6 +12,7 @@
 struct mount {
     struct dentry* root;  // root directory
     struct filesystem* fs;
+    char* dev_name;
 };
 
 struct filesystem {
@@ -34,7 +35,7 @@ struct dentry {
     struct vnode* vnode;
     int type;
     struct mount* mountpoint;
-    struct dentry* mount_parent;
+    struct dentry* mount_origin;
 };
 
 struct file {
@@ -54,6 +55,7 @@ struct vnode_operations {
     int (*lookup)(struct vnode* dir, struct vnode** target, const char* component_name);
     int (*create)(struct vnode* dir, struct vnode** target, const char* component_name);
     int (*mkdir)(struct vnode* dir, struct vnode** target, const char* component_name);
+    int (*load_dentry)(struct dentry* dir, char *component_name);
 };
 
 struct files_struct {
@@ -65,6 +67,7 @@ struct files_struct {
 
 extern struct mount* rootfs;
 
+void traversal(const char* pathname, struct vnode** target_node, char* target_path);
 void rootfs_init();
 int register_filesystem(struct filesystem* fs);
 struct file* vfs_open(const char* pathname, int flags);

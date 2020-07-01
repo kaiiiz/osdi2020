@@ -3,29 +3,36 @@
 #include "mm.h"
 #include "my_string.h"
 #include "tmpfs.h"
+#include "fat32.h"
 #include "uart0.h"
 #include "util.h"
 #include "schedule.h"
+#include "fs.h"
 
 struct mount* rootfs;
 
 void rootfs_init() {
-    struct filesystem* tmpfs = (struct filesystem*)kmalloc(sizeof(struct filesystem));
-    tmpfs->name = (char*)kmalloc(sizeof(char) * 6);
-    strcpy(tmpfs->name, "tmpfs");
-    tmpfs->setup_mount = tmpfs_setup_mount;
-    register_filesystem(tmpfs);
-
+    register_filesystem(&tmpfs);
     rootfs = (struct mount*)kmalloc(sizeof(struct mount));
-    tmpfs->setup_mount(tmpfs, rootfs);
+    tmpfs.setup_mount(&tmpfs, rootfs);
 }
 
 int register_filesystem(struct filesystem* fs) {
     // register the file system to the kernel.
     // you can also initialize memory pool of the file system here.
     if (!strcmp(fs->name, "tmpfs")) {
-        uart_printf("\n[%f] Register tmpfs", get_timestamp());
-        return tmpfs_register();
+        int err = tmpfs_register();
+        if (err == 0) {
+            uart_printf("\n[%f] Register tmpfs", get_timestamp());
+        }
+        return err;
+    }
+    else if (!strcmp(fs->name, "fat32")) {
+        int err = fat32_register();
+        if (err == 0) {
+            uart_printf("\n[%f] Register fat32", get_timestamp());
+        }
+        return err;
     }
     return -1;
 }
@@ -65,6 +72,7 @@ void traversal_recursive(struct dentry* node, const char* path, struct vnode** t
     }
     // find in node's child
     struct list_head* p;
+    int found = 0;
     list_for_each(p, &node->childs) {
         struct dentry* dent = list_entry(p, struct dentry, list);
         if (!strcmp(dent->name, target_path)) {
@@ -74,7 +82,15 @@ void traversal_recursive(struct dentry* node, const char* path, struct vnode** t
             else if (dent->type == DIRECTORY) {
                 traversal_recursive(dent, path + i, target_node, target_path);
             }
+            found = 1;
             break;
+        }
+    }
+    // not found in vnode tree, then try to load dentry in real hard disk
+    if (!found) {
+        int ret = node->vnode->v_ops->load_dentry(node, target_path);
+        if (ret == 0) { // load success, traversal again
+            traversal_recursive(node, path, target_node, target_path);
         }
     }
 }
@@ -97,13 +113,13 @@ struct file* vfs_open(const char* pathname, int flags) {
     traversal(pathname, &target_dir, target_path);
     // 2. Create a new file descriptor for this vnode if found.
     struct vnode* target_file;
-    if (rootfs->root->vnode->v_ops->lookup(target_dir, &target_file, target_path) == 0) { // TODO: target_dir
+    if (target_dir->v_ops->lookup(target_dir, &target_file, target_path) == 0) {
         return create_fd(target_file);
     }
     // 3. Create a new file if O_CREAT is specified in flags.
     else {
         if (flags & O_CREAT) {
-            int res = rootfs->root->vnode->v_ops->create(target_dir, &target_file, target_path); // TODO: target_dir
+            int res = target_dir->v_ops->create(target_dir, &target_file, target_path);
             if (res < 0) return NULL; // error
             target_file->dentry->type = REGULAR_FILE;
             return create_fd(target_file);
@@ -185,15 +201,18 @@ int vfs_mount(const char* device, const char* mountpoint, const char* filesystem
 
     // mount fs on mountpoint
     struct mount* mt = (struct mount*)kmalloc(sizeof(struct mount));
+    mt->dev_name = (char*)kmalloc(sizeof(char) * strlen(device));
+    strcpy(mt->dev_name, device);
     if (!strcmp(filesystem, "tmpfs")) {
-        struct filesystem* tmpfs = (struct filesystem*)kmalloc(sizeof(struct filesystem));
-        tmpfs->name = (char*)kmalloc(sizeof(char) * strlen(device));
-        strcpy(tmpfs->name, device);
-        tmpfs->setup_mount = tmpfs_setup_mount;
-        tmpfs->setup_mount(tmpfs, mt);
-        mount_dir->dentry->mountpoint = mt;
-        mt->root->mount_parent = mount_dir->dentry;
+        register_filesystem(&tmpfs);
+        tmpfs.setup_mount(&tmpfs, mt);
     }
+    else if (!strcmp(filesystem, "fat32")) {
+        register_filesystem(&fat32);
+        fat32.setup_mount(&fat32, mt);
+    }
+    mount_dir->dentry->mountpoint = mt;
+    mt->root->mount_origin = mount_dir->dentry;
 
     return 0;
 }
@@ -208,7 +227,7 @@ int vfs_umount(const char* mountpoint) {
         if (mount_dir->dentry->type != DIRECTORY) {
             return -1;
         }
-        if (!mount_dir->dentry->mount_parent) {
+        if (!mount_dir->dentry->mount_origin) {
             return -2;
         }
     }
@@ -223,7 +242,7 @@ int vfs_umount(const char* mountpoint) {
         list_del(p);
         kfree(dentry);
     }
-    mount_dir->dentry->mount_parent->mountpoint = NULL;
+    mount_dir->dentry->mount_origin->mountpoint = NULL;
 
     return 0;
 }

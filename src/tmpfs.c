@@ -5,8 +5,8 @@
 #include "my_string.h"
 #include "uart0.h"
 
-struct vnode_operations* tmpfs_v_ops;
-struct file_operations* tmpfs_f_ops;
+struct vnode_operations* tmpfs_v_ops = NULL;
+struct file_operations* tmpfs_f_ops = NULL;
 
 struct vnode* tmpfs_create_vnode(struct dentry* dentry) {
     struct vnode* vnode = (struct vnode*)kmalloc(sizeof(struct vnode));
@@ -31,12 +31,17 @@ struct dentry* tmpfs_create_dentry(struct dentry* parent, const char* name, int 
     return dentry;
 }
 
+// error code: -1: already register
 int tmpfs_register() {
+    if (tmpfs_v_ops != NULL && tmpfs_f_ops != NULL) {
+        return -1;
+    }
     tmpfs_v_ops = (struct vnode_operations*)kmalloc(sizeof(struct vnode_operations));
     tmpfs_v_ops->create = tmpfs_create;
     tmpfs_v_ops->lookup = tmpfs_lookup;
     tmpfs_v_ops->ls = tmpfs_ls;
     tmpfs_v_ops->mkdir = tmpfs_mkdir;
+    tmpfs_v_ops->load_dentry = tmpfs_load_dentry;
     tmpfs_f_ops = (struct file_operations*)kmalloc(sizeof(struct file_operations));
     tmpfs_f_ops->read = tmpfs_read;
     tmpfs_f_ops->write = tmpfs_write;
@@ -85,9 +90,13 @@ int tmpfs_ls(struct vnode* dir) {
     struct list_head* p = &dir->dentry->childs;
     list_for_each(p, &dir->dentry->childs) {
         struct dentry* dentry = list_entry(p, struct dentry, list);
-        uart_printf("%s ", dentry->name);
+        if (dentry->type == DIRECTORY) {
+            uart_printf("d: %s\n", dentry->name);
+        }
+        else if (dentry->type == REGULAR_FILE) {
+            uart_printf("f: %s\n", dentry->name);
+        }
     }
-    uart_printf("\n");
     return 0;
 }
 
@@ -127,4 +136,11 @@ int tmpfs_mkdir(struct vnode* dir, struct vnode** target, const char* component_
 
     *target = d_child->vnode;
     return 0;
+}
+
+int tmpfs_load_dentry(struct dentry* dir, char* component_name) {
+    // dummy for compiler
+    dir = dir;
+    component_name = component_name;
+    return -1;
 }
